@@ -25,9 +25,11 @@ jobs:
           -DANDROID_ABI=arm64-v8a \
           -DANDROID_PLATFORM=android-24 \
           -DCMAKE_BUILD_TYPE=Release
+        # Proses compile menggunakan semua core yang tersedia
         cmake --build build -j$(nproc)
         
-    - uses: actions/upload-artifact@v4
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
       with:
-        name: libDisplayFPS
-        path: build/libDisplayFPS.so
+        name: libF3_Debugging
+        path: build/libF3_Debugging.so
