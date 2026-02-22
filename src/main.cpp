@@ -24,7 +24,7 @@ static EGLSurface g_TargetSurface = EGL_NO_SURFACE;
 static EGLBoolean (*orig_eglSwapBuffers)(EGLDisplay, EGLSurface) = nullptr;
 static void (*orig_Input)(void*, void*, void*) = nullptr;
 
-// Hook Input - Dibuat sangat ringan untuk elak lag/crash
+// Hook Input
 static void hook_Input(void* thiz, void* a1, void* a2) {
     if (orig_Input) orig_Input(thiz, a1, a2);
     if (g_Initialized && thiz) {
@@ -32,7 +32,7 @@ static void hook_Input(void* thiz, void* a1, void* a2) {
     }
 }
 
-// State Management - Kunci utama elak crash
+// State Management
 struct GLState {
     GLint last_program, last_texture, last_active_texture, last_array_buffer, last_element_array_buffer, last_vertex_array;
     GLint last_viewport[4], last_scissor_box[4];
@@ -72,30 +72,24 @@ void RestoreState(const GLState& s) {
 static void DrawMinecraftF3() {
     ImGuiIO& io = ImGui::GetIO();
     
-    // Konfigurasi Window (Transparent & Overlay)
     ImGui::SetNextWindowPos(ImVec2(10, 10));
     ImGui::Begin("LeftF3", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);
 
-    // Baris 1: Info Versi & FPS
     ImGui::Text("Minecraft 1.20.1 (Modded/Android)");
     ImGui::Text("%d fps (%d ms) T: inf", (int)io.Framerate, (int)(1000.0f / io.Framerate));
 
-    // Baris 2: Render Info
     const char* renderer = (const char*)glGetString(GL_RENDERER);
     ImGui::Text("Integrated GPU: %s", renderer ? renderer : "Unknown");
     
-    // Baris 3: Koordinat (Contoh dinamik)
     static float fakeX = 142.5f, fakeY = 64.0f, fakeZ = -210.3f;
     ImGui::Text("XYZ: %.3f / %.5f / %.3f", fakeX, fakeY, fakeZ);
     ImGui::Text("Block: %d %d %d", (int)fakeX, (int)fakeY, (int)fakeZ);
     ImGui::Text("Chunk: %d %d %d in %d %d %d", (int)fakeX%16, (int)fakeY%16, (int)fakeZ%16, (int)fakeX/16, (int)fakeY/16, (int)fakeZ/16);
     
-    // Baris 4: Facing
     ImGui::Text("Facing: north (Towards negative Z) (0.0 / 0.0)");
     
     ImGui::End();
 
-    // Menu Kanan (Info Memori & Sistem)
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 10, 10), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     ImGui::Begin("RightF3", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);
     
@@ -113,7 +107,6 @@ static void InitImGui() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     
-    // Scaling biar nampak macam F3 asli
     float scale = (float)g_Height / 1080.0f;
     if (scale < 1.0f) scale = 1.0f;
     io.FontGlobalScale = scale * 1.2f;
@@ -133,8 +126,8 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surf) {
         InitImGui();
 
         GLState state;
-        SaveState(state); // Ambil semua state game sekarang
-
+        SaveState(state); 
+        
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplAndroid_NewFrame(g_Width, g_Height);
         ImGui::NewFrame();
@@ -144,14 +137,14 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surf) {
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        RestoreState(state); // Pulangkan state game supaya game tak crash
+        RestoreState(state);
     }
 
     return orig_eglSwapBuffers(dpy, surf);
 }
 
 static void* MainThread(void*) {
-    sleep(6); // Tunggu lebih lama sikit bagi game settle load lib
+    sleep(6);
     
     GlossInit(true);
     
