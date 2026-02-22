@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(DisplayFPS LANGUAGES C CXX)
+project(F3_Debugging LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -54,5 +54,5 @@ set(SOURCES
     src/ImGui/backends/imgui_impl_android.cpp
 )
 
-add_library(DisplayFPS SHARED ${SOURCES})
-target_link_libraries(DisplayFPS preloader log android EGL GLESv3 GLESv2)
+add_library(F3_Debugging SHARED ${SOURCES})
+target_link_libraries(F3_Debugging preloader log android EGL GLESv3 GLESv2)
