@@ -5,171 +5,173 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <string>
+#include <vector>
 
 #include "pl/Hook.h"
 #include "pl/Gloss.h"
-
 #include "ImGui/imgui.h"
 #include "ImGui/backends/imgui_impl_opengl3.h"
 #include "ImGui/backends/imgui_impl_android.h"
 
+// Global Variables
 static bool g_Initialized = false;
 static int g_Width = 0, g_Height = 0;
 static EGLContext g_TargetContext = EGL_NO_CONTEXT;
 static EGLSurface g_TargetSurface = EGL_NO_SURFACE;
 
+// Function Pointers
 static EGLBoolean (*orig_eglSwapBuffers)(EGLDisplay, EGLSurface) = nullptr;
+static void (*orig_Input)(void*, void*, void*) = nullptr;
 
-static void (*orig_Input1)(void*, void*, void*) = nullptr;
-static void hook_Input1(void* thiz, void* a1, void* a2) {
-    if (orig_Input1) orig_Input1(thiz, a1, a2);
-    if (thiz && g_Initialized) ImGui_ImplAndroid_HandleInputEvent((AInputEvent*)thiz);
-}
-
-static int32_t (*orig_Input2)(void*, void*, bool, long, uint32_t*, AInputEvent**) = nullptr;
-static int32_t hook_Input2(void* thiz, void* a1, bool a2, long a3, uint32_t* a4, AInputEvent** event) {
-    int32_t result = orig_Input2 ? orig_Input2(thiz, a1, a2, a3, a4, event) : 0;
-    if (result == 0 && event && *event && g_Initialized) {
-        ImGui_ImplAndroid_HandleInputEvent(*event);
+// Hook Input - Dibuat sangat ringan untuk elak lag/crash
+static void hook_Input(void* thiz, void* a1, void* a2) {
+    if (orig_Input) orig_Input(thiz, a1, a2);
+    if (g_Initialized && thiz) {
+        ImGui_ImplAndroid_HandleInputEvent((AInputEvent*)thiz);
     }
-    return result;
 }
 
+// State Management - Kunci utama elak crash
 struct GLState {
-    GLint prog, tex, aTex, aBuf, eBuf, vao, fbo, vp[4], sc[4], bSrc, bDst;
-    GLboolean blend, cull, depth, scissor;
+    GLint last_program, last_texture, last_active_texture, last_array_buffer, last_element_array_buffer, last_vertex_array;
+    GLint last_viewport[4], last_scissor_box[4];
+    GLboolean last_enable_blend, last_enable_depth_test, last_enable_scissor_test, last_enable_cull_face;
 };
 
-static void SaveGL(GLState& s) {
-    glGetIntegerv(GL_CURRENT_PROGRAM, &s.prog);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &s.tex);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &s.aTex);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &s.aBuf);
-    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &s.eBuf);
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &s.vao);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s.fbo);
-    glGetIntegerv(GL_VIEWPORT, s.vp);
-    glGetIntegerv(GL_SCISSOR_BOX, s.sc);
-    glGetIntegerv(GL_BLEND_SRC_ALPHA, &s.bSrc);
-    glGetIntegerv(GL_BLEND_DST_ALPHA, &s.bDst);
-    s.blend = glIsEnabled(GL_BLEND);
-    s.cull = glIsEnabled(GL_CULL_FACE);
-    s.depth = glIsEnabled(GL_DEPTH_TEST);
-    s.scissor = glIsEnabled(GL_SCISSOR_TEST);
+void SaveState(GLState& s) {
+    glGetIntegerv(GL_CURRENT_PROGRAM, &s.last_program);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &s.last_texture);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &s.last_active_texture);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &s.last_array_buffer);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &s.last_element_array_buffer);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &s.last_vertex_array);
+    glGetIntegerv(GL_VIEWPORT, s.last_viewport);
+    glGetIntegerv(GL_SCISSOR_BOX, s.last_scissor_box);
+    s.last_enable_blend = glIsEnabled(GL_BLEND);
+    s.last_enable_depth_test = glIsEnabled(GL_DEPTH_TEST);
+    s.last_enable_scissor_test = glIsEnabled(GL_SCISSOR_TEST);
+    s.last_enable_cull_face = glIsEnabled(GL_CULL_FACE);
 }
 
-static void RestoreGL(const GLState& s) {
-    glUseProgram(s.prog);
-    glActiveTexture(s.aTex);
-    glBindTexture(GL_TEXTURE_2D, s.tex);
-    glBindBuffer(GL_ARRAY_BUFFER, s.aBuf);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s.eBuf);
-    glBindVertexArray(s.vao);
-    glBindFramebuffer(GL_FRAMEBUFFER, s.fbo);
-    glViewport(s.vp[0], s.vp[1], s.vp[2], s.vp[3]);
-    glScissor(s.sc[0], s.sc[1], s.sc[2], s.sc[3]);
-    glBlendFunc(s.bSrc, s.bDst);
-    s.blend ? glEnable(GL_BLEND) : glDisable(GL_BLEND);
-    s.cull ? glEnable(GL_CULL_FACE) : glDisable(GL_CULL_FACE);
-    s.depth ? glEnable(GL_DEPTH_TEST) : glDisable(GL_DEPTH_TEST);
-    s.scissor ? glEnable(GL_SCISSOR_TEST) : glDisable(GL_SCISSOR_TEST);
+void RestoreState(const GLState& s) {
+    glUseProgram(s.last_program);
+    glActiveTexture(s.last_active_texture);
+    glBindTexture(GL_TEXTURE_2D, s.last_texture);
+    glBindBuffer(GL_ARRAY_BUFFER, s.last_array_buffer);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, s.last_element_array_buffer);
+    glBindVertexArray(s.last_vertex_array);
+    glViewport(s.last_viewport[0], s.last_viewport[1], s.last_viewport[2], s.last_viewport[3]);
+    glScissor(s.last_scissor_box[0], s.last_scissor_box[1], s.last_scissor_box[2], s.last_scissor_box[3]);
+    if (s.last_enable_blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (s.last_enable_depth_test) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (s.last_enable_scissor_test) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    if (s.last_enable_cull_face) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
 }
 
-static void DrawMenu() {
+static void DrawMinecraftF3() {
     ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowSize(ImVec2(200, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("FPS", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
-    ImGui::Text("%.1f FPS", io.Framerate);
+    
+    // Konfigurasi Window (Transparent & Overlay)
+    ImGui::SetNextWindowPos(ImVec2(10, 10));
+    ImGui::Begin("LeftF3", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);
+
+    // Baris 1: Info Versi & FPS
+    ImGui::Text("Minecraft 1.20.1 (Modded/Android)");
+    ImGui::Text("%d fps (%d ms) T: inf", (int)io.Framerate, (int)(1000.0f / io.Framerate));
+
+    // Baris 2: Render Info
+    const char* renderer = (const char*)glGetString(GL_RENDERER);
+    ImGui::Text("Integrated GPU: %s", renderer ? renderer : "Unknown");
+    
+    // Baris 3: Koordinat (Contoh dinamik)
+    static float fakeX = 142.5f, fakeY = 64.0f, fakeZ = -210.3f;
+    ImGui::Text("XYZ: %.3f / %.5f / %.3f", fakeX, fakeY, fakeZ);
+    ImGui::Text("Block: %d %d %d", (int)fakeX, (int)fakeY, (int)fakeZ);
+    ImGui::Text("Chunk: %d %d %d in %d %d %d", (int)fakeX%16, (int)fakeY%16, (int)fakeZ%16, (int)fakeX/16, (int)fakeY/16, (int)fakeZ/16);
+    
+    // Baris 4: Facing
+    ImGui::Text("Facing: north (Towards negative Z) (0.0 / 0.0)");
+    
+    ImGui::End();
+
+    // Menu Kanan (Info Memori & Sistem)
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 10, 10), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::Begin("RightF3", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);
+    
+    const char* vendor = (const char*)glGetString(GL_VENDOR);
+    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Java: 17.0.1 64bit"); // Simulasi info java
+    ImGui::Text("Mem: %d%% %d/%dMB", 45, 1200, 4096);
+    ImGui::Text("CPU: %s", vendor ? vendor : "ARMv8");
+    ImGui::Text("Display: %dx%d (%s)", g_Width, g_Height, (const char*)glGetString(GL_VERSION));
+    
     ImGui::End();
 }
 
-static void Setup() {
-    if (g_Initialized || g_Width <= 0 || g_Height <= 0) return;
+static void InitImGui() {
+    if (g_Initialized) return;
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;
-    float scale = (float)g_Height / 720.0f;
-    if (scale < 1.5f) scale = 1.5f;
-    if (scale > 4.0f) scale = 4.0f;
-    ImFontConfig cfg;
-    cfg.SizePixels = 32.0f * scale;
-    io.Fonts->AddFontDefault(&cfg);
+    
+    // Scaling biar nampak macam F3 asli
+    float scale = (float)g_Height / 1080.0f;
+    if (scale < 1.0f) scale = 1.0f;
+    io.FontGlobalScale = scale * 1.2f;
+
     ImGui_ImplAndroid_Init();
     ImGui_ImplOpenGL3_Init("#version 300 es");
-    ImGui::GetStyle().ScaleAllSizes(scale);
     g_Initialized = true;
-}
-
-static void Render() {
-    if (!g_Initialized) return;
-    GLState s;
-    SaveGL(s);
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2((float)g_Width, (float)g_Height);
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplAndroid_NewFrame(g_Width, g_Height);
-    ImGui::NewFrame();
-    DrawMenu();
-    ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    RestoreGL(s);
 }
 
 static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surf) {
     if (!orig_eglSwapBuffers) return EGL_FALSE;
-    EGLContext ctx = eglGetCurrentContext();
-    if (ctx == EGL_NO_CONTEXT) return orig_eglSwapBuffers(dpy, surf);
-    EGLint w = 0, h = 0;
-    eglQuerySurface(dpy, surf, EGL_WIDTH, &w);
-    eglQuerySurface(dpy, surf, EGL_HEIGHT, &h);
-    if (w < 500 || h < 500) return orig_eglSwapBuffers(dpy, surf);
-    if (g_TargetContext == EGL_NO_CONTEXT) {
-        EGLint buf = 0;
-        eglQuerySurface(dpy, surf, EGL_RENDER_BUFFER, &buf);
-        if (buf == EGL_BACK_BUFFER) {
-            g_TargetContext = ctx;
-            g_TargetSurface = surf;
-        }
+
+    eglQuerySurface(dpy, surf, EGL_WIDTH, &g_Width);
+    eglQuerySurface(dpy, surf, EGL_HEIGHT, &g_Height);
+
+    if (g_Width > 100 && g_Height > 100) {
+        InitImGui();
+
+        GLState state;
+        SaveState(state); // Ambil semua state game sekarang
+
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplAndroid_NewFrame(g_Width, g_Height);
+        ImGui::NewFrame();
+
+        DrawMinecraftF3();
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        RestoreState(state); // Pulangkan state game supaya game tak crash
     }
-    if (ctx != g_TargetContext || surf != g_TargetSurface)
-        return orig_eglSwapBuffers(dpy, surf);
-    g_Width = w;
-    g_Height = h;
-    Setup();
-    Render();
+
     return orig_eglSwapBuffers(dpy, surf);
 }
 
-static void HookInput() {
-    void* sym1 = (void*)GlossSymbol(GlossOpen("libinput.so"),
-        "_ZN7android13InputConsumer21initializeMotionEventEPNS_11MotionEventEPKNS_12InputMessageE", nullptr);
-    if (sym1) {
-        GHook h = GlossHook(sym1, (void*)hook_Input1, (void**)&orig_Input1);
-        if (h) return;
-    }
-    void* sym2 = (void*)GlossSymbol(GlossOpen("libinput.so"),
-        "_ZN7android13InputConsumer7consumeEPNS_26InputEventFactoryInterfaceEblPjPPNS_10InputEventE", nullptr);
-    if (sym2) {
-        GHook h = GlossHook(sym2, (void*)hook_Input2, (void**)&orig_Input2);
-        if (h) return;
-    }
-}
-
 static void* MainThread(void*) {
-    sleep(3);
+    sleep(6); // Tunggu lebih lama sikit bagi game settle load lib
+    
     GlossInit(true);
-    GHandle hEGL = GlossOpen("libEGL.so");
-    if (!hEGL) return nullptr;
-    void* swap = (void*)GlossSymbol(hEGL, "eglSwapBuffers", nullptr);
-    if (!swap) return nullptr;
-    GHook h = GlossHook(swap, (void*)hook_eglSwapBuffers, (void**)&orig_eglSwapBuffers);
-    if (!h) return nullptr;
-    HookInput();
+    
+    void* hEGL = GlossOpen("libEGL.so");
+    if (hEGL) {
+        void* swap = (void*)GlossSymbol(hEGL, "eglSwapBuffers", nullptr);
+        if (swap) GlossHook(swap, (void*)hook_eglSwapBuffers, (void**)&orig_eglSwapBuffers);
+    }
+
+    void* hInput = GlossOpen("libinput.so");
+    if (hInput) {
+        void* sym = (void*)GlossSymbol(hInput, "_ZN7android13InputConsumer21initializeMotionEventEPNS_11MotionEventEPKNS_12InputMessageE", nullptr);
+        if (sym) GlossHook(sym, (void*)hook_Input, (void**)&orig_Input);
+    }
+
     return nullptr;
 }
 
 __attribute__((constructor))
-void DisplayFPS_Init() {
+void Start() {
     pthread_t t;
     pthread_create(&t, nullptr, MainThread, nullptr);
 }
